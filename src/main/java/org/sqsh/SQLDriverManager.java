@@ -582,8 +582,7 @@ public class SQLDriverManager {
                     String value = getProperty(properties,
                         sqlDriver.getVariables(), name);
                     
-                    if (value != null) {
-                        
+                    if (!SQLDriver.SERVER_PROPERTY.equals(name) && (value != null)) {
                         LOG.fine("Setting connection property '"
                                 + name + "' to '" + value + "'");
                         props.put(name, value);
