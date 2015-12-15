@@ -63,6 +63,10 @@ for jardir in "${ROOT_DIR}/share/jsqsh" /usr/share/jsqsh; do
    fi
 done
 
+
+for jar in "${ROOT_DIR}"/lib/*.jar; do
+    CLASSPATH="${jar}:${CLASSPATH}"
+done
 #
 # Next, we need to find out where the java readline 
 # library is installed.
