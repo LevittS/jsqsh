@@ -33,7 +33,6 @@ import org.sqsh.SQLObjectName;
 import org.sqsh.SQLRenderer;
 import org.sqsh.SQLTools;
 import org.sqsh.Session;
-import org.sqsh.SimpleKeywordTokenizer;
 import org.sqsh.SqshOptions;
 import org.sqsh.options.Argv;
 import org.sqsh.options.OptionProperty;
@@ -94,7 +93,7 @@ public class Describe
                 return 1;
             }
             
-            String catalog = (objName.getCatalog() == null ? "%" : objName.getCatalog());
+            String catalog = (objName.getCatalog() == null ? null : objName.getCatalog());
             String schema = (objName.getSchema() == null ? "%" : objName.getSchema());
             String name = (objName.getName() == null ? "%" : objName.getName());
             
@@ -129,7 +128,7 @@ public class Describe
                     cols.add(10); /* scale */
                 }
                 
-                result = meta.getProcedureColumns(catalog, schema, name, null);
+                result = meta.getProcedureColumns(catalog, schema, name, "%");
             }
             
             SQLRenderer sqlRenderer = session.getSQLRenderer();
