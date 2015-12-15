@@ -1141,6 +1141,12 @@ public class Session
                     
                     return false;
                 }
+                else if (ch == '|') {
+                    return true;
+                }
+                else if (ch == '>') {
+                    return true;
+                }
                 else {
                     
                     return false;
