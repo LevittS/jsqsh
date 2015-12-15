@@ -267,7 +267,15 @@ public class PLSQLAnalyzer
                 
             return false;
         }
-            
+        else if (!";".equals(n)) {
+            // Potentially a labelled END.
+            tokenizer.next();
+            n = tokenizer.peek();
+        }
+        if (";".equals(n)) {
+            // PLSQL delimiter after END, so eat it.
+            tokenizer.next();
+        }
         return true;
     }
     
@@ -303,21 +311,21 @@ public class PLSQLAnalyzer
             
             tok = tokenizer.next();
             while (tok != null) {
-                
-                if ("RETURN".equals(tok)) {
-                    
+
+                if ("USING".equals(tok) || "LANGUAGE".equals(tok)) {
+
                     return false;
                 }
                 else if ("BEGIN".equals(tok)) {
-                    
+
                     return true;
                 }
-                
+
                 tok = tokenizer.next();
             }
         }
         else if ("PROCEDURE".equals(tok) || "TRIGGER".equals(tok)) {
-            
+
             /*
              * Procedures must have a BEGIN
              */
