@@ -710,7 +710,8 @@ public class SQLDriverManager {
             new SQLConnectionContext(session, connDesc, conn, url, 
                 sqlDriver.getAnalyzer(),
                 sqlDriver.getNormalizer(),
-                sqlDriver.getCurrentSchemaQuery());
+                sqlDriver.getCurrentSchemaQuery(),
+                sqlDriver.getCursorSQLType());
         session.setConnectionContext(newContext, false);
 
         try {
@@ -1025,9 +1026,12 @@ public class SQLDriverManager {
         digester.addCallMethod(path, 
             "setAnalyzer", 1, new Class[] { java.lang.String.class });
             digester.addCallParam(path, 0, "analyzer");
-        digester.addCallMethod(path, 
+        digester.addCallMethod(path,
             "setNormalizer", 1, new Class[] { java.lang.String.class });
             digester.addCallParam(path, 0, "normalizer");
+        digester.addCallMethod(path,
+            "setCursorSQLType", 1, new Class[] { java.lang.Integer.class });
+            digester.addCallParam(path, 0, "cursorSQLType");
             
         path = "Drivers/Driver/Classpath";
         digester.addCallMethod(path, 

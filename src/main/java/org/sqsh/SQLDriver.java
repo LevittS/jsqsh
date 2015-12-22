@@ -103,6 +103,7 @@ public class SQLDriver
     private SQLNormalizer normalizer = DEFAULT_NORMALIZER;
     private String currentSchemaQuery = null;
     private List<String> classpath = null;
+    private Integer cursorType = null;
     
     public SQLDriver() {
         
@@ -282,6 +283,18 @@ public class SQLDriver
         }
         
         return normalizer;
+    }
+
+
+    public void setCursorSQLType(Integer typeId)
+    {
+        cursorType = typeId;
+    }
+
+
+    public Integer getCursorSQLType()
+    {
+        return cursorType;
     }
     
     /**

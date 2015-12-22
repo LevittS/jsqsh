@@ -63,6 +63,7 @@
            class="oracle.jdbc.OracleDriver"
            analyzer="org.sqsh.analyzers.PLSQLAnalyzer"
            normalizer="org.sqsh.normalizer.UpperCaseNormalizer"
+           cursorSQLType="-10"
            url="jdbc:oracle:thin:@${server}:${port}:${SID}">
            
        <Variable name="server">localhost</Variable>
@@ -75,6 +76,7 @@
            class="oracle.jdbc.driver.OracleDriver"
            analyzer="org.sqsh.analyzers.PLSQLAnalyzer"
            normalizer="org.sqsh.normalizer.UpperCaseNormalizer"
+           cursorSQLType="-10"
            url="jdbc:oracle:oci8:@${SID}">
        <Variable name="SID">ORCL</Variable>
    </Driver>
@@ -84,6 +86,7 @@
            class="com.ibm.db2.jcc.DB2Driver"
            analyzer="org.sqsh.analyzers.PLSQLAnalyzer"
            normalizer="org.sqsh.normalizer.UpperCaseNormalizer"
+           cursorSQLType="-100008"
            url="jdbc:db2://${server}:${port}/${db}">
            
        <Variable name="db">changeme</Variable>
@@ -98,6 +101,7 @@
            class="com.ibm.db2.jcc.DB2Driver"
            analyzer="org.sqsh.analyzers.PLSQLAnalyzer"
            normalizer="org.sqsh.normalizer.UpperCaseNormalizer"
+           cursorSQLType="-100008"
            url="jdbc:db2://${server}:${port}/${db}">
            
        <Variable name="db">changeme</Variable>
@@ -123,6 +127,7 @@
            target="PostgreSQL"
            class="org.postgresql.Driver"
            analyzer="org.sqsh.analyzers.PLPGSQLAnalyzer"
+           cursorSQLType="1111"
            url="jdbc:postgresql://${server}:${port}#if($db)/${db}#end">
            
        <Variable name="server">localhost</Variable>

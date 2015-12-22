@@ -22,9 +22,6 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.logging.Logger;
 
-import org.sqsh.ConnectionDescriptor;
-import org.sqsh.SQLDriver;
-import org.sqsh.SQLDriverManager;
 import org.sqsh.analyzers.SQLAnalyzer;
 import org.sqsh.input.completion.Completer;
 import org.sqsh.input.completion.DatabaseObjectCompleter;
@@ -89,6 +86,8 @@ public class SQLConnectionContext
      * Query to run to determine the current schema
      */
     private String currentSchemaQuery;
+
+    private Integer cursorSQLType;
     
     /**
      * Creates a ConnectionContext
@@ -108,7 +107,8 @@ public class SQLConnectionContext
             String url, 
             SQLAnalyzer analyzer,
             SQLNormalizer normalizer,
-            String currentSchemaQuery) {
+            String currentSchemaQuery,
+            Integer vendorCursorTypeId) {
         
         super(session);
         
@@ -119,6 +119,7 @@ public class SQLConnectionContext
         this.url = url;
         this.normalizer = normalizer;
         this.currentSchemaQuery = currentSchemaQuery;
+        this.cursorSQLType = vendorCursorTypeId;
     }
     
     
@@ -144,6 +145,11 @@ public class SQLConnectionContext
     public boolean supportsQueryTimeout() {
 
         return true;
+    }
+
+
+    public Integer getCursorSQLType() {
+        return cursorSQLType;
     }
 
     /**
