@@ -32,19 +32,10 @@ public class CallParameter {
     private int    direction;
     private String value;
     
-    public CallParameter (int idx, int dataType,
-            int direction, String value) {
-        
-        this.idx = idx;
-        this.dataType = dataType;
-        this.direction = direction;
-        this.value = value;
-    }
     
-    public CallParameter (int idx, String value) {
+    public CallParameter (int idx) {
         
         this.idx = idx;
-        this.value = value;
         this.direction = INPUT;
         this.dataType = Types.VARCHAR;
     }
@@ -83,9 +74,9 @@ public class CallParameter {
         
         return value;
     }
-    
+
     public void setValue (String value) {
-        
+
         this.value = value;
     }
 }

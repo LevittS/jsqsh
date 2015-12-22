@@ -23,16 +23,16 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Timestamp;
 import java.sql.Types;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.logging.Logger;
 
+import org.sqsh.commands.Call;
 import org.sqsh.signals.CancelingSignalHandler;
 import org.sqsh.signals.SignalManager;
-import org.sqsh.SqshTypes;
 import org.sqsh.util.TimeUtils;
 
 public class SQLRenderer {
@@ -349,240 +349,18 @@ public class SQLRenderer {
      * @throws SQLException Thrown if there is an issue.
      */
     @SuppressWarnings("resource")
-    public boolean executeCall (Session session, String sql)
-        throws SQLException {
-        
-        boolean ok = true;
-        Renderer renderer = session.getContext().getRendererManager()
-            .getRenderer(session);
-        
-        CallableStatement statement = null;
-        
-        Connection conn = session.getConnection();
-        CancelingSignalHandler sigHandler = null;
-        SignalManager sigMan = SignalManager.getInstance();
-        DataFormatter formatter = session.getDataFormatter();
-        
-        if (conn == null) {
-            
-            throw new SQLException("No database connection has been established");
-        }
-        
-        SQLConnectionContext sqlContext = 
-            (SQLConnectionContext) session.getConnectionContext();
-        
-        try {
-            
-            /*
-             * Start the visual timer. This will do nothing if the facility has
-             * not been enabled.  Note that the facility is stopped on error
-             * or when the first row has been received.
-             */
-            session.startVisualTimer();
-            
-            /*
-             * Cannot pass by reference, so fake it with an array
-             */
-            boolean []hasReturnMarker = new boolean[1];
-            hasReturnMarker[0] = false;
-            
+    public boolean executeCall (Session session, String sql) throws SQLException
+    {
+        List<Call.Parameter> parameterValues = new ArrayList<Call.Parameter>();
+
             /*
              * Parse out a { call .. } statement, looking for inout parameters
              * like "?=10" and returning the values for those parameters.
              */
-            List<String> inoutParameterValues = new ArrayList<String>();
-            sql = getInoutParameterValues(sql, inoutParameterValues, hasReturnMarker);
-            int inoutParamIdx = 0;
-            
-            statement = conn.prepareCall(sql);
-            
-            /*
-             * Fetch information for the parameters.  Any out or inout parameter
-             * needs to be "registered" to let the server know we are interested
-             * in seeing the value of that parameter.
-             */
-            ParameterMetaData paramMeta = statement.getParameterMetaData();
-            int nParams = paramMeta.getParameterCount();
-            List<Integer> outputParams = new ArrayList<Integer>();
-            for (int i = 1; i <= nParams; i++) {
-                
-                int paramMode = paramMeta.getParameterMode(i);
-                
-                // System.out.println("parameter #" 
-                //   + i + " = " + paramMeta.getParameterTypeName(i));
-                
-                if (paramMode == ParameterMetaData.parameterModeOut
-                    || paramMode == ParameterMetaData.parameterModeInOut) {
-                    
-                    outputParams.add(i);
-                    
-                    /*
-                     * If the parameter type is "OTHER", then it may be a cursor. This
-                     * is the suck because there is no standard for CURSOR data type :(
-                     * So, I have hard coded logic to deal with how different drivers 
-                     * handle cursor.
-                     */
-                    int paramType = paramMeta.getParameterType(i);
-                    if (paramType == Types.OTHER) {
-                        
-                        /*
-                         * TODO: I really want to make handling of "other" data types
-                         * pluggable by driver. But, at the moment I'm lazy and have
-                         * some irritating time constraints, so hard coded for now.
-                         */
-                        
-                        String paramTypeName = paramMeta.getParameterTypeName(i);
-                        
-                        if (paramTypeName.equals("CURSOR")) {
-                            
-                            String driverName = sqlContext.getConnectionDescriptor().getDriver();
-                            if (driverName.startsWith("db2")) {
-                                
-                                statement.registerOutParameter(i, SqshTypes.DB2_CURSOR);
-                            }
-                            else if (driverName.startsWith("ora")) {
-                                
-                                statement.registerOutParameter(i, SqshTypes.ORACLE_CURSOR);
-                            }
-                            else {
-                                
-                                System.err.println("Output parameter #" + i + " appears to be"
-                                    + " a cursor of a type that jsqsh does not know how to"
-                                    + " deal with (unfortunately, cursor handling is not a"
-                                    + " JDBC standard, so every driver is different). If you would"
-                                    + " like this fixed, please send an e-mail to scottgray1-at-gmail.com"
-                                    + " with the details of which JDBC driver you are using");
-                                SQLTools.close(statement);
-                                return false;
-                            }
-                        }
-                        else {
-                            
-                            System.err.println("Output parameter #" + i + " appears to be of a"
-                                + "data type not supported by the JDBC standard (type \"" 
-                                + paramTypeName + "\"). If you would like jsqsh to support this"
-                                + " type, please send an e-mail to scottgray1-at-gmail.com with"
-                                + " information about your JDBC driver, target database platform"
-                                + " and this type name");
-                        }
-                    }
-                    else {
-                        
-                        statement.registerOutParameter(i, paramType);
-                    }
-                }
-                
-                if (paramMode == ParameterMetaData.parameterModeInOut) {
-                    
-                    if (inoutParamIdx >= inoutParameterValues.size()) {
-                        
-                        session.err.println("Parameter #" + i + "is an INOUT "
-                            + "parameters and must specify a value with the "
-                            + "syntax '?=<value>'");
-                        SQLTools.close(statement);
-                        return false;
-                    }
-                    
-                    statement.setString(i, inoutParameterValues.get(inoutParamIdx++));
-                }
-            }
-            
-            sigHandler = new CancelingSignalHandler(statement);
-            sigMan.push(sigHandler);
-            
-            startTime = System.currentTimeMillis();
-            
-            boolean hasResults = statement.execute();
-            
-            session.stopVisualTimer();
-            
-            ok = execute(renderer, session, statement, hasResults);
-            
-            /*
-             * Display any output parameters
-             */
-            if (outputParams.size() > 0) {
-                
-                /*
-                 * If any of the output parameters were result sets then display
-                 * then as a regular result set.
-                 */
-                Iterator<Integer> iter = outputParams.iterator();
-                
-                while (iter.hasNext()) {
-                    
-                    int idx = iter.next();
-                    
-                    Object o = statement.getObject(idx);
-                    if (o instanceof ResultSet) {
-                            
-                        session.out.println();
-                        session.out.println("Parameter #" + idx + " CURSOR:");
-                            
-                        displayResults(renderer, session, (ResultSet) o, null);
-                        
-                        iter.remove();
-                    }
-                }
-            }
-            
-            /*
-             * Are there any output parameters left after displaying the output
-             * of cursors?
-             */
-            if (outputParams.size() > 0) {
-            
-                int nOuts = outputParams.size();
-                
-                ColumnDescription []cols = new ColumnDescription[nOuts];
-                String []row = new String[nOuts];
-                for (int i = 0; i < nOuts; i++) {
-                    
-                    int idx = outputParams.get(i);
-                    
-                    String name = "Param #" + idx;
-                    if (idx == 1 && hasReturnMarker[0] == true) {
-                        
-                        name = "Return Code";
-                    }
-                    
-                    cols[i] = getDescription(name,
-                        paramMeta.getParameterType(idx),
-                        paramMeta.getPrecision(idx),
-                        paramMeta.getScale(idx));
-                    
-                    Object val = statement.getObject(idx);
-                    if (statement.wasNull() || val == null) {
-                        
-                        row[i] = formatter.getNull();
-                    }
-                    else {
-                    
-                        row[i] = cols[i].getFormatter().format(val);
-                    }
-                }
-                
-                session.out.println();
-                renderer.header(cols);
-                renderer.row(row);
-                renderer.flush();
-            }
-        }
-        finally {
-            
-            session.stopVisualTimer();
-            
-            if (sigHandler != null) {
-                
-                sigMan.pop();
-            }
-            
-            SQLTools.close(statement);
-        }
-        
-        return ok;
-        
+        return executeCall(session, parseCallParameters(sql, parameterValues),
+                           parameterValues.toArray(new Call.Parameter[parameterValues.size()]));
     }
+
     
     /**
      * Given a <code>{ [?=] call ... }</code> statement, atttempts to parse
@@ -597,104 +375,117 @@ public class SQLRenderer {
      * @param sql The call statement to parse out
      * @return A list of values to provide as initial values for in/out parameters
      */
-    private String getInoutParameterValues(String sql, List<String> inoutParams,
-        boolean []hasReturnMarker) {
+    private String parseCallParameters(String sql, List<Call.Parameter> params) {
         
-        int idx = 0;
+        int sqlIdx = 0;
+        int paramIdx = 0;
         int len = sql.length();
         
         int chunkStart = 0;
         
         // Search for the open brace
-        idx = SQLParseUtil.skipWhitespace(sql, len, idx);
-        if (idx >= len || sql.charAt(idx) != '{') {
+        sqlIdx = SQLParseUtil.skipWhitespace(sql, len, sqlIdx);
+        if (sqlIdx >= len || sql.charAt(sqlIdx) != '{') {
             
             return sql;
         }
         
         // Search for either "call" or "?="
-        ++idx;
-        idx = SQLParseUtil.skipWhitespace(sql, len, idx);
+        ++sqlIdx;
+        sqlIdx = SQLParseUtil.skipWhitespace(sql, len, sqlIdx);
         
-        if (idx >= len) {
+        if (sqlIdx >= len) {
             
             return sql;
         }
-        
-        // We have the initial ?= (or do we??)
-        if (sql.charAt(idx) == '?') {
-            
-            ++idx;
-            idx = SQLParseUtil.skipWhitespace(sql, len, idx);
-            
-            if (idx >= len || sql.charAt(idx) != '=') {
-                
-                return sql;
-            }
-            
-            hasReturnMarker[0] = true;
-            ++idx;
-            idx = SQLParseUtil.skipWhitespace(sql, len, idx);
-        }
-        
-        // Better have a "call" word here
-        if (idx >= len || ! (sql.regionMatches(true, idx, "call", 0, 4))) {
-            
-            return sql;
-        }
-        
-        // Skip "call"
-        idx += 4;
-        
+
         /*
          * While we find inout parameters, we have to convert "?=<value>" to
          * just "?" while we go, so this buffer holds the new string.
          */
         StringBuilder sb = new StringBuilder(sql.length());
+
+        
+        // We have the initial ?= (or do we??)
+        if (sql.charAt(sqlIdx) == '?') {
+            
+            ++sqlIdx;
+
+            if ((sqlIdx < len - 1) && (sql.charAt(sqlIdx) == '^') &&
+                                                Character.isLetter(sql.charAt(sqlIdx + 1))) {
+                sb.append(sql, chunkStart, sqlIdx);
+
+                params.add(new Call.Parameter(String.valueOf(sql.charAt(sqlIdx + 1)) + "^", paramIdx++));
+                // Move over ^ and the type.
+                sqlIdx += 2;
+                chunkStart = sqlIdx;
+            }
+            else {
+                // Default to binding as a return string.
+                params.add(new Call.Parameter("U^", paramIdx++));
+            }
+
+            sqlIdx = SQLParseUtil.skipWhitespace(sql, len, sqlIdx);
+            
+            if (sqlIdx >= len || sql.charAt(sqlIdx) != '=') {
+                
+                return sql;
+            }
+            ++sqlIdx;
+            sqlIdx = SQLParseUtil.skipWhitespace(sql, len, sqlIdx);
+        }
+        
+        // Better have a "call" word here
+        if (sqlIdx >= len || ! (sql.regionMatches(true, sqlIdx, "call", 0, 4))) {
+            
+            return sql;
+        }
+        
+        // Skip "call"
+        sqlIdx += 4;
         
         /*
          * From here, the logic gets a little more hokey. I'm not going to
          * actually parse this thing out properly, but going to scan it for
          * occurances of ? that do not appear inside of quoted strings.
          */
-        while (idx < len) {
+        while (sqlIdx < len) {
             
-            char ch = sql.charAt(idx);
+            char ch = sql.charAt(sqlIdx);
             switch (ch) {
             
             case '\'': 
             case '"': 
-                idx = SQLParseUtil.skipQuotedString(sql, len, idx);
+                sqlIdx = SQLParseUtil.skipQuotedString(sql, len, sqlIdx);
                 break;
             
             case '?':
                 // Skip the question mark
-                ++idx; 
-                idx = SQLParseUtil.skipWhitespace(sql, len, idx);
+                ++sqlIdx;
+                sqlIdx = SQLParseUtil.skipWhitespace(sql, len, sqlIdx);
                 
                 // Did we hit a '?='?
-                if (idx < len && sql.charAt(idx) == '=') {
+                if (sqlIdx < len && sql.charAt(sqlIdx) == '=') {
                     
                     // Copy everything from the previous chunk into the statement
-                    sb.append(sql, chunkStart, idx);
+                    sb.append(sql, chunkStart, sqlIdx);
                     
                     // Skip the '='
-                    ++idx;
-                    idx = SQLParseUtil.skipWhitespace(sql, len, idx);
+                    ++sqlIdx;
+                    sqlIdx = SQLParseUtil.skipWhitespace(sql, len, sqlIdx);
                     
-                    if (idx >= len) {
-                        
-                        inoutParams.add("");
+                    if (sqlIdx >= len) {
+                        params.add(new Call.Parameter("", paramIdx++));
                     }
-                    else if (sql.charAt(idx) == '\'' || sql.charAt(idx) == '"') {
+                    else if (sql.charAt(sqlIdx) == '\'' || sql.charAt(sqlIdx) == '"') {
                         
-                        char quote = sql.charAt(idx);
+                        char quote = sql.charAt(sqlIdx);
                         
                         // We have a quoted value like "?='hello world'"
-                        int startIdx = idx;
-                        idx = SQLParseUtil.skipQuotedString(sql, len, idx);
+                        int startIdx = sqlIdx;
+                        sqlIdx = SQLParseUtil.skipQuotedString(sql, len, sqlIdx);
                         
-                        String value = sql.substring(startIdx+1, idx-1);
+                        String value = sql.substring(startIdx+1, sqlIdx-1);
                         
                         // Were there nested quotes like 'Scott''s book', then
                         // we need to de-double the quotes.
@@ -704,33 +495,34 @@ public class SQLRenderer {
                                     String.valueOf(quote) + quote, 
                                     String.valueOf(quote));
                         }
-                        
-                        inoutParams.add(value);
+                        params.add(new Call.Parameter(value, paramIdx++));
                     }
                     else {
-                        
                         // We have a simple constant value like "?=10"
-                        int startIdx = idx++;
-                        while (idx < len) {
+                        int startIdx = sqlIdx++;
+                        while (sqlIdx < len) {
                             
-                            char ch2 = sql.charAt(idx);
+                            char ch2 = sql.charAt(sqlIdx);
                             if (Character.isWhitespace(ch2)
                                 || ch2 == ',' || ch2 == ')' || ch2 == '(' ) {
                                 
                                 break;
                             }
                             
-                            ++idx;
+                            ++sqlIdx;
                         }
-                        
-                        inoutParams.add(sql.substring(startIdx, idx));
+                        params.add(new Call.Parameter(sql.substring(startIdx, sqlIdx), paramIdx++));
                     }
                     
-                    chunkStart = idx;
+                    chunkStart = sqlIdx;
+                }
+                else {
+                    // Just a default String bound, non-input parameter.
+                    params.add(new Call.Parameter("U^", paramIdx++));
                 }
                 break;
             default:
-                ++idx;
+                ++sqlIdx;
             }
         }
         
@@ -751,8 +543,7 @@ public class SQLRenderer {
      *   
      * @throws SQLException Thrown if there is an issue.
      */
-    public boolean executeCall (Session session, String sql,
-            CallParameter []params)
+    public boolean executeCall (Session session, String sql, Call.Parameter []params)
         throws SQLException {
         
         boolean ok = true;
@@ -763,6 +554,7 @@ public class SQLRenderer {
         Connection conn = session.getConnection();
         CancelingSignalHandler sigHandler = null;
         SignalManager sigMan = SignalManager.getInstance();
+        Call.Parameter[] outputParams;
         
         if (conn == null) {
             
@@ -779,7 +571,14 @@ public class SQLRenderer {
             session.startVisualTimer();
             
             statement = conn.prepareCall(sql);
-            bindParameters(statement, params);
+
+            ParameterMetaData paramMeta = statement.getParameterMetaData();
+
+            for (Call.Parameter param : params) {
+                updateParameter(paramMeta, param);
+            }
+            bindInputParameters(statement, params);
+            outputParams = bindOutputParameters(statement, params);
             
             sigHandler = new CancelingSignalHandler(statement);
             sigMan.push(sigHandler);
@@ -796,26 +595,37 @@ public class SQLRenderer {
              * If there were any output parameters, then try to display 
              * them.
              */
-            for (CallParameter param : params) {
-                
-                if (param.getDirection() == CallParameter.OUTPUT
-                        || param.getDirection() == CallParameter.INOUT) {
-                    
-                    if (param.getType() == SqshTypes.ORACLE_CURSOR) {
-                        
-                        
-                        ResultSet rs = 
-                            (ResultSet) statement.getObject(param.getIdx());
-                        
-                        try {
-                            
-                            displayResults(renderer, session, rs, null);
-                        }
-                        finally {
-                            
-                            SQLTools.close(rs);
-                        }
-                    }
+            if (outputParams.length > 0) {
+                RenderedResult paramsResult;
+                ColumnDescription[] cols = new ColumnDescription[outputParams.length];
+                String[] row = new String[outputParams.length];
+                DataFormatter formatter = session.getDataFormatter();
+                CallableStatementDisplayValue displayVal = new CallableStatementDisplayValue(statement);
+                int rs = 0;
+
+                // Build the descriptions...
+                for (int i = 0; i < outputParams.length; i++) {
+                    Call.Parameter param = outputParams[i];
+                    int idx = param.getIdx();
+                    ColumnDescription colDesc;
+
+                    String name = "Param #" + idx;
+                    cols[i] = getDescription(name, param.getType(),
+                                        param.hasPrecision() ? param.getPrecision() : formatter.getPrecision(),
+                                        param.hasPrecision() ? param.getScale() : formatter.getScale());
+                }
+                paramsResult = new RenderedResult(cols);
+                for (int i = 0; i < outputParams.length; i++) {
+                    row[i] = displayValue(session, 1, outputParams[i].getIdx(), cols[i], displayVal,
+                                          paramsResult);
+                }
+                paramsResult.addRow(row);
+                renderResult(renderer, paramsResult);
+                for (RenderedResult containedResult : paramsResult.getContainedResults()) {
+                    rs++;
+                    session.out.println("");
+                    session.out.println("[RESULTSET#" + rs + "]:");
+                    renderResult(renderer, containedResult);
                 }
             }
         }
@@ -870,7 +680,7 @@ public class SQLRenderer {
             session.startVisualTimer();
             
             statement = conn.prepareStatement(sql);
-            bindParameters(statement, params);
+            bindInputParameters(statement, params);
             
             sigHandler = new CancelingSignalHandler(statement);
             sigMan.push(sigHandler);
@@ -1031,7 +841,28 @@ public class SQLRenderer {
             }
         }
     }
-    
+
+    private Call.Parameter[] bindOutputParameters(CallableStatement statement, Call.Parameter []params)
+                                                                            throws SQLException
+    {
+        List<Call.Parameter> boundParams = new ArrayList<Call.Parameter>(params.length);
+        Integer cursorType;
+
+        cursorType = ((SQLConnectionContext) sqshContext.getCurrentSession().getConnectionContext()).getCursorSQLType();
+
+        for (Call.Parameter param : params) {
+            if ((param.getDirection() != CallParameter.OUTPUT) &&
+                                                    (param.getDirection() != CallParameter.INOUT)) {
+                continue;
+            }
+            statement.registerOutParameter(param.getIdx(),
+                                      param.getType() == SqshTypes.SQSH_CURSOR ? cursorType : param.getType());
+            boundParams.add(param);
+        }
+        return boundParams.toArray(new Call.Parameter[boundParams.size()]);
+    }
+
+
     /**
      * Used to bind parameters to a prepared or callable statement.
      * 
@@ -1039,99 +870,52 @@ public class SQLRenderer {
      * @param params The parameters to bind
      * @throws SQLException Thrown if something goes wrong.
      */
-    private void bindParameters (PreparedStatement statement,
-            CallParameter []params)
-        throws SQLException {
-        
+    private void bindInputParameters(PreparedStatement statement, CallParameter []params)
+                                throws SQLException {
+        Integer cursorType;
+
+        cursorType = ((SQLConnectionContext) sqshContext.getCurrentSession().getConnectionContext()).getCursorSQLType();
         for (CallParameter param : params) {
-            
             String value = param.getValue();
-            
+
+            if ((param.getDirection() != CallParameter.INPUT) && (param.getDirection() != CallParameter.INOUT)) {
+                continue;
+            }
             try {
-                
-                switch (param.getType()) {
-                    
-                    case Types.VARCHAR:
-                    case Types.CHAR:
-                        statement.setString(param.getIdx(), value);
-                        break;
-                    
-                    case Types.BOOLEAN:
-                        if (value == null || value.length() == 0) {
-                                        
-                            statement.setNull(param.getIdx(), Types.BOOLEAN);
-                        }
-                        else {
-                                        
-                            statement.setBoolean(param.getIdx(), 
-                                Boolean.valueOf(value));
-                        }
-                        break;
-                                    
-                    case Types.DOUBLE:
-                        if (value == null || value.length() == 0) {
-                                        
-                            statement.setNull(param.getIdx(), Types.DOUBLE);
-                        }
-                        else {
-                                        
-                            statement.setDouble(param.getIdx(),
-                                Double.valueOf(value));
-                        }
-                        break;
-                                    
-                    case Types.FLOAT:
-                        if (value == null || value.length() == 0) {
-                                        
-                            statement.setNull(param.getIdx(), Types.FLOAT);
-                        }
-                        else {
-                                        
-                            statement.setFloat(param.getIdx(),
-                                Float.valueOf(value));
-                        }
-                        break;
-                                    
-                    case Types.INTEGER:
-                        if (value == null || value.length() == 0) {
-                                        
-                            statement.setNull(param.getIdx(), Types.INTEGER);
-                        }
-                        else {
-                                        
-                            statement.setInt(param.getIdx(),
-                                Integer.valueOf(value));
-                        }
-                        break;
-                                    
-                    case Types.BIGINT:
-                        if (value == null || value.length() == 0) {
-                                        
-                            statement.setNull(param.getIdx(), Types.BIGINT);
-                        }
-                        else {
-                                        
-                            statement.setLong(param.getIdx(),
-                                Long.valueOf(value));
-                        }
-                        break;
-                                    
-                    case SqshTypes.ORACLE_CURSOR:
-                        if (statement instanceof CallableStatement) {
-                                        
-                            ((CallableStatement) statement)
-                                .registerOutParameter(param.getIdx(),
-                                    SqshTypes.ORACLE_CURSOR);
-                        }
-                        break;
-                                
-                                    
-                    default:
-                        throw new SQLException("Unrecognized parameter type");
+                if (value != null) {
+                    switch (param.getType()) {
+                        case Types.VARCHAR:
+                        case Types.CHAR:
+                            statement.setString(param.getIdx(), value);
+                            break;
+                        case Types.BOOLEAN:
+                            statement.setBoolean(param.getIdx(), Boolean.valueOf(value));
+                            break;
+                        case Types.DOUBLE:
+                            statement.setDouble(param.getIdx(), Double.valueOf(value));
+                            break;
+                        case Types.FLOAT:
+                            statement.setFloat(param.getIdx(), Float.valueOf(value));
+                            break;
+                        case Types.INTEGER:
+                            statement.setInt(param.getIdx(), Integer.valueOf(value));
+                            break;
+                        case Types.BIGINT:
+                            statement.setLong(param.getIdx(), Long.valueOf(value));
+                            break;
+                        case SqshTypes.SQSH_CURSOR:
+                            statement.setNull(param.getIdx(), cursorType);
+                            break;
+                        default:
+                            throw new SQLException("Unrecognized parameter type");
+                    }
+                }
+                else {
+                    statement.setNull(param.getIdx(),
+                                      param.getType() == SqshTypes.SQSH_CURSOR ? cursorType : param.getType());
                 }
             }
             catch (NumberFormatException e) {
-                        
                 throw new SQLException ("Invalid number format '"
                     + value + "' provided for type '" + param.getType() + "'");
             }
@@ -1439,24 +1223,19 @@ public class SQLRenderer {
      * @return The number of rows displayed.
      * @throws SQLException Thrown if something bad happens.
      */
-    public int displayResults(Renderer renderer, Session session,
-            ResultSet resultSet, Set<Integer>displayCols)
-        throws SQLException {
-        
+    private RenderedResult prerenderResults(Session session, ResultSet resultSet, Set<Integer>displayCols)
+                                                                             throws SQLException
+    {
+        RenderedResult result;
+
         SQLTools.printWarnings(session, resultSet);
         
-        DataFormatter formatter = sqshContext.getDataFormatter();
-        ColumnDescription []columns = getDescription(resultSet, displayCols);
         int nCols = resultSet.getMetaData().getColumnCount();
         int rowCount = 0;
         
-        /*
-         * Display the header
-         */
-        renderer.header(columns);
-        
+        result = new RenderedResult(getDescriptions(resultSet, displayCols));
+
         while (resultSet.next()) {
-            
             SQLTools.printWarnings(session, resultSet);
             
             ++rowCount;
@@ -1464,7 +1243,6 @@ public class SQLRenderer {
                 
                 firstRowTime = System.currentTimeMillis();
             }
-            
             /*
              * Check to see if we have hit the limit on the number of
              * rows we are to process.
@@ -1481,91 +1259,295 @@ public class SQLRenderer {
                     continue;
                 }
             }
-            
-            String row[] = new String[columns.length];
+            String row[] = new String[result.getNumberOfColumns()];
+            DisplayValue dispValue = new ResultSetDisplayValue(resultSet);
             int idx = 0;
             for (int i = 1; i <= nCols; i++) {
-                
                 if (displayCols == null || displayCols.contains(i)) {
-                    
-                    Object value = null;
-                    boolean wasNull = false;
-                    boolean wasError = false;
-                    
-                    /*
-                     * With certain drivers I've had problems with resultSet.getObject()
-                     * so for those data types that I run into this issue I am
-                     * calling the "correct" getter method.
-                     */
-                    try {
-                        
-                        switch (columns[idx].getNativeType()) {
-                    
-                        case Types.TIMESTAMP:
-                            value = resultSet.getTimestamp(i);
-                            break;
-                        case Types.VARCHAR:
-                        case Types.CHAR:
-                        case Types.LONGVARCHAR:
-                            value = resultSet.getString(i);
-                            break;
-                        default:
-                            value = resultSet.getObject(i);
-                        }
-                        
-                        wasNull = resultSet.wasNull();
-                    }
-                    catch (SQLException e) {
-                        
-                        LOG.fine("Row #" + rowCount + ", column " + i 
-                                + ", driver error decoding value: " + e.getMessage());
-                        
-                        session.setException(e);
-                        wasError = true;
-                        wasNull = false;
-                    }
-                    
-                    if (wasNull) {
-                        
-                        row[idx] = formatter.getNull();
-                    }
-                    else {
-                        
-                        if (wasError) {
-                            
-                            row[idx] = "*ERROR*";
-                        }
-                        else if (value == null) {
-                            
-                            session.err.println("WARNING: Row #" 
-                                + rowCount + ", column " + i + ", driver indicated "
-                                + "a value present, but returned NULL");
-                            row[idx] = formatter.getNull();
-                        }
-                        else {
-                            
-                            row[idx] = columns[idx].getFormatter().format(value);
-                        }
-                    }
-                    
+                    row[idx] = displayValue(session, rowCount, i, result.getColumn(idx), dispValue, result);
                     ++idx;
                 }
             }
-            
+            result.addRow(row);
+        }
+        return result;
+    }
+
+
+    public int displayResults(Renderer renderer, Session session, ResultSet resultSet, Set<Integer>displayCols)
+                                                                             throws SQLException
+    {
+        int rowCount;
+        int containedResultCount = 0;
+        RenderedResult result = prerenderResults(session, resultSet, displayCols);
+
+        rowCount = renderResult(renderer, result);
+        for (RenderedResult containedResult : result.getContainedResults()) {
+            containedResultCount++;
+            session.out.println("");
+            session.out.println("[RESULTSET#" + containedResultCount + "]:");
+            renderResult(renderer, containedResult);
+        }
+        return rowCount;
+    }
+
+
+    private int renderResult(Renderer renderer, RenderedResult result)
+    {
+        /*
+         * Display the header
+         */
+        renderer.header(result.getColumns());
+        for (String[] row : result.getRows()) {
             if (renderer.row(row) == false) {
-                
                 return -1;
             }
         }
-        
         if (renderer.flush() == false) {
-            
+
             return -1;
         }
-        
-        return rowCount;
+        return result.getNumberOfRows();
     }
-    
+
+
+    private interface DisplayValue
+    {
+        java.sql.Timestamp getTimestamp(int col) throws SQLException;
+
+        Object getObject(int col) throws SQLException;
+
+        String getString(int col) throws SQLException;
+
+        boolean wasNull() throws SQLException;
+    }
+
+
+    private static class ResultSetDisplayValue implements DisplayValue
+    {
+        private final ResultSet resultSet;
+
+        public ResultSetDisplayValue(ResultSet resultSet)
+        {
+            this.resultSet = resultSet;
+        }
+
+
+        @Override
+        public java.sql.Timestamp getTimestamp(int col) throws SQLException
+        {
+            return resultSet.getTimestamp(col);
+        }
+
+
+        @Override
+        public String getString(int col) throws SQLException
+        {
+            return resultSet.getString(col);
+        }
+
+
+        @Override
+        public Object getObject(int col) throws SQLException
+        {
+            return resultSet.getObject(col);
+        }
+
+
+        @Override
+        public boolean wasNull() throws SQLException
+        {
+            return resultSet.wasNull();
+        }
+    }
+
+
+    private static class CallableStatementDisplayValue implements DisplayValue
+    {
+        private final CallableStatement statement;
+
+        private boolean lastNull = false;
+
+        public CallableStatementDisplayValue(CallableStatement statement)
+        {
+            this.statement = statement;
+        }
+
+        @Override
+        public Timestamp getTimestamp(int col) throws SQLException
+        {
+            lastNull = statement.getObject(col) == null;
+            return statement.getTimestamp(col);
+        }
+
+
+        @Override
+        public Object getObject(int col) throws SQLException
+        {
+            Object obj = statement.getObject(col);
+
+            lastNull = (obj == null);
+            return obj;
+        }
+
+
+        @Override
+        public String getString(int col) throws SQLException
+        {
+            lastNull = statement.getObject(col) == null;
+            return statement.getString(col);
+        }
+
+
+        @Override
+        public boolean wasNull() throws SQLException
+        {
+            return lastNull;
+        }
+
+    }
+
+
+
+    private class RenderedResult
+    {
+        private final ColumnDescription[] cols;
+        private final List<String[]> rows = new ArrayList<String[]>();
+        private final List<RenderedResult> containedResults = new ArrayList<RenderedResult>();
+
+
+        public RenderedResult(ColumnDescription[] cols)
+        {
+            this.cols = cols;
+        }
+
+
+        public int getNumberOfColumns()
+        {
+            return cols.length;
+        }
+
+
+        public ColumnDescription getColumn(int idx)
+        {
+            return cols[idx];
+        }
+
+
+        public ColumnDescription[] getColumns()
+        {
+            return cols;
+        }
+
+
+        public void addRow(String[] row)
+        {
+            rows.add(row);
+        }
+
+
+        public void addContainedResult(RenderedResult result)
+        {
+            containedResults.add(result);
+        }
+
+
+        public List<String[]> getRows()
+        {
+            return rows;
+        }
+
+
+        public List<RenderedResult> getContainedResults()
+        {
+            return containedResults;
+        }
+
+
+        public int getNumberOfContainedResults()
+        {
+            return containedResults.size();
+        }
+
+
+        public int getNumberOfRows()
+        {
+            return rows.size();
+        }
+
+
+    }
+
+
+    private String displayValue(Session session, int row, int col, ColumnDescription column,
+                                DisplayValue displayVal, RenderedResult result)
+    {
+        DataFormatter formatter = sqshContext.getDataFormatter();
+        String disp;
+        Object value = null;
+        boolean wasNull = false;
+        boolean wasError = false;
+
+        /*
+         * With certain drivers I've had problems with resultSet.getObject()
+         * so for those data types that I run into this issue I am
+         * calling the "correct" getter method.
+         */
+        try {
+
+            switch (column.getNativeType()) {
+
+            case Types.TIMESTAMP:
+                value = displayVal.getTimestamp(col);
+                break;
+            case Types.VARCHAR:
+            case Types.CHAR:
+            case Types.LONGVARCHAR:
+                value = displayVal.getString(col);
+                break;
+            default:
+                value = displayVal.getObject(col);
+            }
+            if ((value != null) && (value instanceof ResultSet)) {
+                ResultSet rs = (ResultSet) value;
+
+                result.addContainedResult(prerenderResults(session, rs, null));
+                value = "[RESULTSET#" + result.getNumberOfContainedResults() + "]";
+                rs.close();
+            }
+            wasNull = displayVal.wasNull();
+        }
+        catch (SQLException e) {
+            LOG.fine("Row #" + row + ", column " + col
+                    + ", driver error decoding value: " + e.getMessage());
+
+            session.setException(e);
+            wasError = true;
+            wasNull = false;
+        }
+
+        if (wasNull) {
+            disp = formatter.getNull();
+        }
+        else {
+
+            if (wasError) {
+                disp = "*ERROR*";
+            }
+            else if (value == null) {
+
+                session.err.println("WARNING: Row #"
+                    + row + ", column " + col + ", driver indicated "
+                    + "a value present, but returned NULL");
+                disp = formatter.getNull();
+            }
+            else {
+                disp = column.getFormatter().format(value);
+            }
+        }
+        return disp;
+    }
+
     /**
      * Called to render the result set metadata as a table. This is
      * primarily for debugging purposes.
@@ -1701,8 +1683,7 @@ public class SQLRenderer {
      * @return A description of the result set.
      * @throws SQLException Thrown if there is a problem.
      */
-    private ColumnDescription[] getDescription(ResultSet resultSet,
-            Set<Integer>displayCols)
+    private ColumnDescription[] getDescriptions(ResultSet resultSet, Set<Integer>displayCols)
         throws SQLException {
         
         ResultSetMetaData meta = resultSet.getMetaData();
@@ -1769,6 +1750,46 @@ public class SQLRenderer {
             precision,
             scale);
     }
+
+
+
+
+    public void updateParameter(ParameterMetaData metaData, Call.Parameter param) throws SQLException
+    {
+        int metaType;
+        int metaScale;
+        int metaPrecision;
+        int idx = param.getIdx();
+
+        if (param.getType() == SqshTypes.SQSH_UNDETERMINED) {
+            try {
+                metaType = metaData.getParameterType(idx);
+                metaScale = metaData.getScale(idx);
+                metaPrecision = metaData.getPrecision(idx);
+                if (metaType == Types.OTHER) {
+                        /*
+                         * TODO: I really want to make handling of "other" data types
+                         * pluggable by driver. But, at the moment I'm lazy and have
+                         * some irritating time constraints, so hard coded for now.
+                         */
+                        String paramTypeName = metaData.getParameterTypeName(idx);
+
+                        if ("CURSOR".equalsIgnoreCase(paramTypeName) ||
+                                                        "REFCURSOR".equalsIgnoreCase(paramTypeName)) {
+                            metaType = SqshTypes.SQSH_CURSOR;
+                        }
+                }
+                param.setMetaDataDetails(metaType, metaPrecision, metaScale);
+            }
+            catch (SQLException e) {
+                // Ignore this, Oracle doesn't appear to support very well...
+            }
+        }
+        if (param.getType() == SqshTypes.SQSH_UNDETERMINED) {
+            throw new SQLException("Call Parameter #" + idx + " type is UNDETERMINED, cannot execute");
+        }
+    }
+
     
     /**
      * Returns a description of how to format a column

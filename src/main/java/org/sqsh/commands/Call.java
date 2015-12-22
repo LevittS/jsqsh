@@ -29,12 +29,15 @@ import java.util.List;
 import org.sqsh.SqshTypes;
 import org.sqsh.BufferManager;
 import org.sqsh.CallParameter;
+import org.sqsh.CannotSetValueError;
 import org.sqsh.Command;
+import org.sqsh.ConnectionContext;
 import org.sqsh.DatabaseCommand;
 import org.sqsh.SQLRenderer;
 import org.sqsh.SQLTools;
 import org.sqsh.Session;
 import org.sqsh.SqshOptions;
+import org.sqsh.Style;
 import org.sqsh.options.Argv;
 import org.sqsh.options.OptionProperty;
 import org.sqsh.util.CSVReader;
@@ -55,10 +58,15 @@ public class Call
         public String inputFile = null;
         
         @OptionProperty(
+            option='m', longOption="display-style", arg=REQUIRED,
+            description="Sets the display style for output")
+        public String style = null;
+
+        @OptionProperty(
             option='i', longOption="ignore-header", arg=NONE,
             description="Ignore headers in input file")
         public boolean hasHeaders = false;
-        
+
         @Argv(program="\\call", min=0)
         public List<String> arguments = new ArrayList<String>();
     }
@@ -77,10 +85,12 @@ public class Call
         throws Exception {
         
         Options options = (Options)opts;
+        Style origStyle = null;
         String argv[] = options.arguments.toArray(new String[0]);
         
         BufferManager bufferMan = session.getBufferManager();
         String sql = bufferMan.getCurrent().toString();
+        ConnectionContext conn = session.getConnectionContext();
         
         /*
          * If this is an interactive session, then we create a new
@@ -116,6 +126,16 @@ public class Call
         }
         
         try {
+            if (options.style != null) {
+                origStyle = conn.getStyle();
+                try {
+                    conn.setStyle(options.style);
+                }
+                catch (CannotSetValueError e) {
+                    session.err.println(e.getMessage());
+                    return 1;
+                }
+            }
             
             if (options.inputFile == null) {
                 
@@ -131,6 +151,11 @@ public class Call
             
             SQLTools.printException(session, e);
             return 1;
+        }
+        finally {
+            if (origStyle != null) {
+                conn.setStyle(origStyle);
+            }
         }
         
         return 0;
@@ -289,89 +314,154 @@ public class Call
         return true;
     }
     
-    private static class Parameter
+    public static class Parameter
         extends CallParameter {
         
         private int columnIdx = -1;
         private String description;
+        private boolean valueSet = false;
+        private int precision = -1;
+        private int scale = -1;
         
         public Parameter (String description, int idx) {
             
-            super(idx, description);
+            super(idx);
             
-            String value = description;
             char type = 'S';
+            boolean hasInput = true;
             
             /*
              * By default, the value is the description.
              */
             this.description = description;
             
-            if (description.length() >= 2
-                && description.charAt(1) == ':') {
-            
-                type = Character.toUpperCase(description.charAt(0));
-                value = description.substring(2);
-            }
-            
-            if (value.length() > 0 
-                    && value.charAt(0) == '#') {
-                
-                if (value.length() == 1) {
-                    
-                    columnIdx = idx - 1;
+            if ((description.length() >= 2) && ":!^".indexOf(description.charAt(1)) != -1) {
+                /**
+                 *
+                 * [Type][Value]
+                 *
+                 * Type:
+                 * Input [lower]
+                 * Output [upper] (No Value)
+                 * InOut (upper] (With value / Null Value)
+                 *
+                 * Value:
+                 * With Value '=[Val]'
+                 * Null Value '!'
+                 * No Value '^'
+                 *
+                 * Examples:
+                 * s=Hello - String In (Hello).
+                 * S=Hello - String InOut (Hello);
+                 * s! - String In (NULL)
+                 * S! - String InOut (NULL)
+                 * S^ - String Out
+                 * s^  - String (Unset).
+                 */
+                type = description.charAt(0);
+                switch (description.charAt(1)) {
+                    case ':':
+                        setValue(idx, description.substring(2));
+                        break;
+                    case '!':
+                        setValue(null);
+                        break;
+                    case '^':
+                        hasInput = false;
+                        break;
                 }
-                else {
-                    
-                    columnIdx = Integer.parseInt(value.substring(1)) - 1;
-                }
-                
-                value = null;
             }
-            
-            switch (type) {
-                
+            else {
+                setValue(idx, description);
+            }
+
+            if (Character.toUpperCase(type) != type) {
+                setDirection(INPUT);
+            }
+            else {
+                setDirection(hasInput ? CallParameter.INOUT : CallParameter.OUTPUT);
+            }
+            switch (Character.toUpperCase(type)) {
                 case 'S':
                 case 'C':
                     setType(Types.VARCHAR);
                     break;
-                    
                 case 'Z':
                     setType(Types.BOOLEAN);
                     break;
-                    
                 case 'D':
                     setType(Types.DOUBLE);
                     break;
-                    
                 case 'F':
                     setType(Types.FLOAT);
                     break;
-                        
                 case 'I':
                     setType(Types.INTEGER);
                     break;
-                        
                 case 'J':
                     setType(Types.BIGINT);
                     break;
-                   
                 case 'R':
-                    setType(SqshTypes.ORACLE_CURSOR);
-                    setDirection(CallParameter.OUTPUT);
+                    setType(SqshTypes.SQSH_CURSOR);
+                    break;
+                case 'U':
+                    setType(SqshTypes.SQSH_UNDETERMINED);
+                    break;
             }
-            
-            setValue(value);
         }
-        
+
+
+        private void setValue(int idx, String value)
+        {
+            if (value.length() > 0 && value.charAt(0) == '#') {
+                if (value.length() == 1) {
+                    columnIdx = idx - 1;
+                }
+                else {
+                    columnIdx = Integer.parseInt(value.substring(1)) - 1;
+                }
+            }
+            else {
+                setValue(value);
+            }
+        }
+
+
         public int getColumnIdx() {
             
             return columnIdx;
         }
+
         
         public String getDescription() {
             
             return description;
+        }
+
+
+        public void setMetaDataDetails(int type, int precision, int scale)
+        {
+            setType(type);
+            this.precision = precision;
+            this.scale = scale;
+        }
+
+
+        public int getPrecision()
+        {
+            return precision;
+        }
+
+
+        public boolean hasPrecision()
+        {
+            return precision != -1;
+        }
+
+
+        public int getScale()
+        {
+            return scale;
         }
         
     }
