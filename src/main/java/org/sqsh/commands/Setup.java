@@ -15,7 +15,6 @@
  */
 package org.sqsh.commands;
 
-import static org.sqsh.options.ArgumentRequired.NONE;
 
 import java.io.File;
 import java.io.PrintStream;
@@ -43,6 +42,7 @@ import org.sqsh.SqshOptions;
 import org.sqsh.SQLDriver.DriverVariable;
 import org.sqsh.analyzers.ANSIAnalyzer;
 import org.sqsh.analyzers.NullAnalyzer;
+import org.sqsh.analyzers.PLPGSQLAnalyzer;
 import org.sqsh.analyzers.PLSQLAnalyzer;
 import org.sqsh.analyzers.SQLAnalyzer;
 import org.sqsh.analyzers.TSQLAnalyzer;
@@ -52,7 +52,6 @@ import org.sqsh.normalizer.NullNormalizer;
 import org.sqsh.normalizer.SQLNormalizer;
 import org.sqsh.normalizer.UpperCaseNormalizer;
 import org.sqsh.options.Argv;
-import org.sqsh.options.OptionProperty;
 
 public class Setup extends Command {
     
@@ -1085,6 +1084,7 @@ public class Setup extends Command {
         out.println("2.  ANSI SQL");
         out.println("3.  PL/SQL");
         out.println("4.  T-SQL");
+        out.println("5.  PL/PGSQL");
         
         while (true) {
             
@@ -1107,6 +1107,7 @@ public class Setup extends Command {
                 case 2: return new ANSIAnalyzer();
                 case 3: return new PLSQLAnalyzer();
                 case 4: return new TSQLAnalyzer();
+                case 5: return new PLPGSQLAnalyzer();
                 default:
                     break;
                 }

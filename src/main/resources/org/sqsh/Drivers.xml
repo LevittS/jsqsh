@@ -122,7 +122,7 @@
    <Driver name="pgsql" 
            target="PostgreSQL"
            class="org.postgresql.Driver"
-           analyzer="org.sqsh.analyzers.ANSIAnalyzer"
+           analyzer="org.sqsh.analyzers.PLPGSQLAnalyzer"
            url="jdbc:postgresql://${server}:${port}#if($db)/${db}#end">
            
        <Variable name="server">localhost</Variable>

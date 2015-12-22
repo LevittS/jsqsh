@@ -30,6 +30,8 @@ public class SimpleKeywordTokenizer {
     private int idx;
     private char terminator;
     private boolean toUpperCase = true;
+
+    private String additionalTokenChars = "_";
     
     private Stack<String> tokens = new Stack<String>();
     
@@ -45,6 +47,12 @@ public class SimpleKeywordTokenizer {
     public SimpleKeywordTokenizer (CharSequence sql, char terminator) {
         
         this(sql, terminator, true);
+    }
+
+
+    public void addToTokenCharacters(String additionalCharacters)
+    {
+        this.additionalTokenChars += additionalCharacters;
     }
     
     /**
@@ -79,10 +87,7 @@ public class SimpleKeywordTokenizer {
         while (!done && idx < len) {
             
             char ch = sql.charAt(idx);
-            if (Character.isLetter(ch)
-                    || Character.isDigit(ch)
-                    || ch == '_') {
-                
+            if (isTokenCharacter(ch)) {
                 sb.append(toUpperCase ? Character.toUpperCase(ch) : ch);
                 ++idx;
             }
@@ -122,6 +127,13 @@ public class SimpleKeywordTokenizer {
         
         return t;
     }
+
+    public boolean isTokenCharacter(char ch)
+    {
+        return Character.isLetter(ch) || Character.isDigit(ch) ||
+               (additionalTokenChars.indexOf(ch)  != -1);
+
+    }
     
     /**
      * Skips sequences of characters that we just don't care about. In
@@ -136,7 +148,7 @@ public class SimpleKeywordTokenizer {
             
             char ch = sql.charAt(idx);
             
-            if (Character.isLetter(ch) || ch == terminator) {
+            if (isTokenCharacter(ch) || (ch == terminator)) {
                 
                 done = true;
             }
